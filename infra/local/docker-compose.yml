@@ -1,0 +1,64 @@
+# Phase 2 -- local data plane for GarbhaAI
+# Mirrors, at zero cost, what the paid stack would give us:
+#   postgres -> Cloud SQL (metadata: image records, grades, audit log)
+#   minio    -> Cloud Storage (raw + processed embryo images, model artifacts)
+#   redis    -> Memorystore (Feast online feature store + app caching)
+#
+# Usage:
+#   cd infra/local
+#   docker compose up -d
+#   docker compose ps        # check health
+#   docker compose down      # stop (data persists in ./.volumes)
+#   docker compose down -v   # stop AND wipe volumes
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: garbhaai-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: garbhaai
+      POSTGRES_PASSWORD: garbhaai_local_dev
+      POSTGRES_DB: garbhaai
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./.volumes/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U garbhaai -d garbhaai"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    container_name: garbhaai-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: garbhaai
+      MINIO_ROOT_PASSWORD: garbhaai_local_dev
+    ports:
+      - "9000:9000"   # S3-compatible API
+      - "9001:9001"   # web console
+    volumes:
+      - ./.volumes/minio:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: garbhaai-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./.volumes/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
