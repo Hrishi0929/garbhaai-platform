@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Phase 2 exit-gate helper: brings up postgres/minio/redis and creates
-# the MinIO bucket the pipeline will write images/artifacts to.
+# Phase 2 exit-gate helper: brings up postgres/minio/redis.
+# MinIO auto-creates the garbhaai-images bucket on first boot via
+# MINIO_DEFAULT_BUCKETS in docker-compose.yml.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -18,12 +19,7 @@ for i in $(seq 1 30); do
   sleep 2
 done
 
-echo "==> Creating MinIO bucket (garbhaai-images) if it doesn't exist..."
-docker run --rm --network host \
-  -e MC_HOST_local="http://garbhaai:garbhaai_local_dev@localhost:9000" \
-  quay.io/minio/mc mb -p local/garbhaai-images
-
 echo "==> Done. Services:"
 echo "  Postgres  -> localhost:5432  (user: garbhaai / db: garbhaai)"
-echo "  MinIO API -> localhost:9000  (console: http://localhost:9001)"
+echo "  MinIO API -> localhost:9000  (console: http://localhost:9001, bucket: garbhaai-images)"
 echo "  Redis     -> localhost:6379"
