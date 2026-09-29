@@ -1,0 +1,4 @@
+[core]
+    remote = localremote
+['remote "localremote"']
+    url = /Users/hrishikeshwadki/Claude/Projects/FinalEndProjectISBAMPBA/dvc-storage
