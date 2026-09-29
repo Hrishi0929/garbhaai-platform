@@ -21,7 +21,7 @@ done
 echo "==> Creating MinIO bucket (garbhaai-images) if it doesn't exist..."
 docker run --rm --network host \
   -e MC_HOST_local="http://garbhaai:garbhaai_local_dev@localhost:9000" \
-  minio/mc mb -p local/garbhaai-images
+  quay.io/minio/mc mb -p local/garbhaai-images
 
 echo "==> Done. Services:"
 echo "  Postgres  -> localhost:5432  (user: garbhaai / db: garbhaai)"
