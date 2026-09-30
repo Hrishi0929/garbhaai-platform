@@ -7,10 +7,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # 'inference' (Phase 5: classifier head, doctor review, labeled-data cache)
-        # is intentionally left out of the matrix until that service directory
-        # exists -- add it back when Phase 5 lands.
-        service: [ui, ingestion, quality-check, preprocessing, feature-extraction]
+        service: [ui, ingestion, quality-check, preprocessing, feature-extraction, inference]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

@@ -1,20 +1,39 @@
 """
-Streamlit apps aren't practically unit-testable end-to-end without a
+Streamlit rendering itself isn't practically unit-testable without a
 running browser, so these tests cover the pure helper logic in main.py
-(the parts with actual behavior worth protecting) rather than the
-Streamlit rendering itself.
+that has real behavior worth protecting: the review payload shape sent
+to the inference service's /review endpoint.
 """
-from main import summarize_features
+import json
+
+from main import build_review_payload
 
 
-def test_summarize_features_short_vector():
-    out = summarize_features([1.0, 2.0])
-    assert "2 dims total" in out
+def _fake_grade_result():
+    return {
+        "source": "model",
+        "image_hash": "8bfa22b8",
+        "grade": "B",
+        "confidence": 0.81,
+        "probabilities": {"A": 0.1, "B": 0.81, "C": 0.09},
+    }
 
 
-def test_summarize_features_truncates_preview():
-    features = [float(i) for i in range(512)]
-    out = summarize_features(features)
-    assert "512 dims total" in out
-    # only the first 5 values should appear in the preview text
-    assert "0.000, 1.000, 2.000, 3.000, 4.000" in out
+def test_build_review_payload_accept():
+    payload = build_review_payload(
+        _fake_grade_result(), day=3, patient_id="P1", final_grade="B", doctor_overridden=False
+    )
+    assert payload["image_hash"] == "8bfa22b8"
+    assert payload["model_grade"] == "B"
+    assert payload["final_grade"] == "B"
+    assert payload["doctor_overridden"] is False
+    assert json.loads(payload["model_probabilities"]) == {"A": 0.1, "B": 0.81, "C": 0.09}
+
+
+def test_build_review_payload_override():
+    payload = build_review_payload(
+        _fake_grade_result(), day=3, patient_id="P1", final_grade="C", doctor_overridden=True
+    )
+    assert payload["model_grade"] == "B"  # what the model said
+    assert payload["final_grade"] == "C"  # what the doctor corrected it to
+    assert payload["doctor_overridden"] is True

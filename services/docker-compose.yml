@@ -1,15 +1,15 @@
-# Phase 4 application services, wired together for local end-to-end testing.
+# Phase 4/5 application services, wired together for local end-to-end testing.
 #
 # Assumes the Phase 2 data plane (infra/local/docker-compose.yml) is already
-# running -- ingestion reaches its Postgres and RustFS over
-# host.docker.internal (Docker Desktop's bridge back to the host), since
-# those containers live in a separate compose project/network, published
-# on the host ports set up in Phase 2 (5432, 9000).
+# running -- ingestion and inference reach its Postgres (and, for ingestion,
+# RustFS) over host.docker.internal (Docker Desktop's bridge back to the
+# host), since those containers live in a separate compose project/network,
+# published on the host ports set up in Phase 2 (5432, 9000).
 #
 # Usage:
 #   cd infra/local && ./bootstrap.sh          # Phase 2 data plane, if not already up
 #   cd ../../services && docker compose up --build
-#   open http://localhost:8501                # the UI
+#   open http://localhost:8511                # the UI
 services:
   quality-check:
     build: ./quality-check
@@ -41,6 +41,20 @@ services:
       RUSTFS_SECRET_KEY: garbhaai_local_dev
       RUSTFS_BUCKET: garbhaai-images
 
+  inference:
+    build: ./inference
+    ports:
+      - "8005:8000"
+    environment:
+      FEATURE_EXTRACTION_URL: http://feature-extraction:8000
+      POSTGRES_HOST: host.docker.internal
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: garbhaai
+      POSTGRES_USER: garbhaai
+      POSTGRES_PASSWORD: garbhaai_local_dev
+    depends_on:
+      - feature-extraction
+
   ui:
     build: ./ui
     ports:
@@ -51,8 +65,8 @@ services:
     environment:
       INGESTION_URL: http://ingestion:8000
       QUALITY_CHECK_URL: http://quality-check:8000
-      FEATURE_EXTRACTION_URL: http://feature-extraction:8000
+      INFERENCE_URL: http://inference:8000
     depends_on:
       - ingestion
       - quality-check
-      - feature-extraction
+      - inference
