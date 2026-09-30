@@ -25,7 +25,7 @@ from openlineage.client import OpenLineageClient
 from openlineage.client.event_v2 import RunEvent, RunState, Run, Job
 from openlineage.client.uuid import generate_new_uuid
 
-MARQUEZ_URL = "http://localhost:5000"
+MARQUEZ_URL = "http://localhost:5002"
 JOB_NAMESPACE = "garbhaai"
 JOB_NAME = "data_quality.validate_raw_manifest"
 

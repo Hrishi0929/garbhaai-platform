@@ -19,7 +19,7 @@ pip install "great_expectations>=1.0" "openlineage-python"
 cd infra/local/marquez && docker compose up -d && cd -
 cd training/data_quality
 python build_manifest.py        # writes manifest.csv from the raw Dataset folder
-python ge_validate.py           # runs GE checks + emits lineage events to Marquez
+python ge_validate.py           # runs GE checks + emits lineage events to Marquez (posts to http://localhost:5002)
 ```
 
 Then open http://localhost:3000 and look for the `garbhaai` namespace

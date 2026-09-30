@@ -12,7 +12,7 @@
 #   cd infra/local/marquez
 #   docker compose up -d
 #   open http://localhost:3000        # Marquez web UI (lineage graph)
-#   API is at http://localhost:5000   # what ge_validate.py posts events to
+#   API is at http://localhost:5002   # what ge_validate.py posts events to (5000 remapped -- see below)
 
 services:
   marquez-db:
@@ -46,7 +46,7 @@ services:
       POSTGRES_USER: marquez
       POSTGRES_PASSWORD: marquez
     ports:
-      - "5000:5000"   # HTTP API -- OpenLineage events POST here
+      - "5002:5000"   # HTTP API -- OpenLineage events POST here (5000 remapped: macOS AirPlay Receiver squats on 5000)
       - "5001:5001"   # admin port
 
   marquez-web:
