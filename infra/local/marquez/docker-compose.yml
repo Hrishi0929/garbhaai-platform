@@ -1,0 +1,63 @@
+# Phase 3 -- lineage backend for GarbhaAI.
+# Marquez implements the OpenLineage spec: it's what receives the
+# START/COMPLETE run events our jobs (e.g. training/data_quality/ge_validate.py)
+# emit, and renders them as a lineage graph (which job read/wrote which dataset).
+#
+# Kept as its own compose stack (separate from infra/local/docker-compose.yml)
+# because Marquez ships with its own dedicated Postgres for metadata storage --
+# running it standalone avoids any collision with the garbhaai-postgres
+# container that holds our actual application data.
+#
+# Usage:
+#   cd infra/local/marquez
+#   docker compose up -d
+#   open http://localhost:3000        # Marquez web UI (lineage graph)
+#   API is at http://localhost:5000   # what ge_validate.py posts events to
+
+services:
+  marquez-db:
+    image: postgres:14
+    container_name: garbhaai-marquez-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: marquez
+      POSTGRES_PASSWORD: marquez
+      POSTGRES_DB: marquez
+    volumes:
+      - ./.volumes/marquez-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marquez -d marquez"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  marquez-api:
+    image: marquezproject/marquez:latest
+    container_name: garbhaai-marquez-api
+    restart: unless-stopped
+    depends_on:
+      marquez-db:
+        condition: service_healthy
+    environment:
+      MARQUEZ_PORT: 5000
+      POSTGRES_HOST: marquez-db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: marquez
+      POSTGRES_USER: marquez
+      POSTGRES_PASSWORD: marquez
+    ports:
+      - "5000:5000"   # HTTP API -- OpenLineage events POST here
+      - "5001:5001"   # admin port
+
+  marquez-web:
+    image: marquezproject/marquez-web:latest
+    container_name: garbhaai-marquez-web
+    restart: unless-stopped
+    depends_on:
+      - marquez-api
+    environment:
+      MARQUEZ_HOST: marquez-api
+      MARQUEZ_PORT: 5000
+      REACT_APP_ADVANCED_SEARCH: "false"
+    ports:
+      - "3000:3000"   # web UI -- lineage graph

@@ -18,3 +18,7 @@ infra/local/.volumes/
 training/feature_repo/data/registry.db
 training/feature_repo/data/*.parquet
 training/feature_repo/.feast/
+
+# Great Expectations / data quality local artifacts
+training/data_quality/manifest.csv
+infra/local/marquez/.volumes/
