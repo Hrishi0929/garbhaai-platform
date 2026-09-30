@@ -13,3 +13,8 @@ node_modules/
 
 # local infra state
 infra/local/.volumes/
+
+# Feast local dev artifacts
+training/feature_repo/data/registry.db
+training/feature_repo/data/*.parquet
+training/feature_repo/.feast/

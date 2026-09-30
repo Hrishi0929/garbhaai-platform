@@ -1,0 +1,20 @@
+# Feast feature store config for GarbhaAI.
+# online_store (Redis)      -> stands in for Vertex AI Feature Store's online serving
+# offline_store (file/parquet) -> stands in for BigQuery/Cloud Storage offline store
+#
+# Phase 2 proves this plumbing end-to-end with placeholder data. Phase 4/5
+# swap the FileSource in features.py for the real feature-extraction
+# service's output once it exists -- nothing here needs to change to do that.
+
+project: garbhaai
+provider: local
+registry: data/registry.db
+
+online_store:
+  type: redis
+  connection_string: "localhost:6379"
+
+offline_store:
+  type: file
+
+entity_key_serialization_version: 2
