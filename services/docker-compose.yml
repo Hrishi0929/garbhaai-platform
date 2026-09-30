@@ -44,7 +44,10 @@ services:
   ui:
     build: ./ui
     ports:
-      - "8501:8501"
+      - "8511:8501"  # host 8501 is commonly taken by another local Streamlit
+                     # app (e.g. the old garbhaai-embryo-grading app) -- this
+                     # avoids the collision rather than requiring you to
+                     # close that other process.
     environment:
       INGESTION_URL: http://ingestion:8000
       QUALITY_CHECK_URL: http://quality-check:8000
