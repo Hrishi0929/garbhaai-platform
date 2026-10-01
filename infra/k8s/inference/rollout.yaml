@@ -39,8 +39,8 @@ spec:
         # the MLflow alias alone would do nothing: a running pod has
         # already loaded its checkpoint into _checkpoint_cache and has no
         # reason to look again.
-        garbhaai.io/model-version: "0"
-        garbhaai.io/model-run-id: ""
+        garbhaai.io/model-version: "1"
+        garbhaai.io/model-run-id: "036d6a1379494644992924eb7abf20c0"
     spec:
       containers:
         - name: inference
