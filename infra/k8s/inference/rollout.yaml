@@ -1,0 +1,87 @@
+# Phase 7: the inference service as an Argo Rollouts Rollout instead of a
+# plain Deployment, so a model promotion ships through a canary instead of
+# an all-at-once restart. Argo CD (infra/k8s/inference/argocd-application.yaml)
+# syncs this file from git onto the kind cluster whenever it changes.
+#
+# Local-demo image strategy: this repo has no image registry wired up yet
+# (that's ghcr.io per the README's swap table, for a later phase), so the
+# image below is loaded directly into the kind nodes with
+#   docker build -t garbhaai-inference:dev services/inference
+#   kind load docker-image garbhaai-inference:dev --name garbhaai
+# imagePullPolicy: IfNotPresent so the kubelet uses that locally-loaded
+# image instead of trying (and failing) to pull garbhaai-inference:dev
+# from a real registry.
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: garbhaai-inference
+  namespace: garbhaai
+  labels:
+    app: garbhaai-inference
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: garbhaai-inference
+  template:
+    metadata:
+      labels:
+        app: garbhaai-inference
+      annotations:
+        # promote.py rewrites these two values (regex substitution, see
+        # bump_manifest()) every time it moves the "production" alias.
+        # Kubernetes diffs pod template annotations like any other template
+        # field, so changing these -- even though the image tag itself
+        # stays "dev" -- is what makes the Rollout controller see a new
+        # pod spec and start a canary, which is what actually gets the
+        # newly-promoted model in front of real pods. Without this, moving
+        # the MLflow alias alone would do nothing: a running pod has
+        # already loaded its checkpoint into _checkpoint_cache and has no
+        # reason to look again.
+        garbhaai.io/model-version: "0"
+        garbhaai.io/model-run-id: ""
+    spec:
+      containers:
+        - name: inference
+          image: garbhaai-inference:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          env:
+            # kind nodes run as Docker containers alongside the Mac's other
+            # docker-compose services (Postgres/MLflow/RustFS/Redis, all
+            # still Docker Compose -- Phase 7 only moves the inference
+            # service itself onto the cluster). On Docker Desktop for Mac,
+            # host.docker.internal resolves from inside kind back to the
+            # host, which is the only reason this works without also
+            # containerizing the rest of the stack.
+            - name: MLFLOW_TRACKING_URI
+              value: "http://host.docker.internal:5500"
+            - name: FEATURE_EXTRACTION_URL
+              value: "http://host.docker.internal:8004"
+            - name: POSTGRES_HOST
+              value: "host.docker.internal"
+            - name: MODEL_ALIAS
+              value: "production"
+          envFrom:
+            - secretRef:
+                name: garbhaai-inference-secrets
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 15
+  strategy:
+    canary:
+      steps:
+        - setWeight: 10
+        - pause: { duration: 30s }
+        - setWeight: 100

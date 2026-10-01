@@ -1,0 +1,36 @@
+# Points Argo CD at this folder in the repo. Once this is applied, any
+# push to main that touches infra/k8s/inference/ (including promote.py's
+# annotation bump) gets auto-synced onto the kind cluster -- this is the
+# GitOps mechanism the runbook describes: "Argo CD then auto-syncs
+# whatever is merged to main onto the local cluster -- this is what ...
+# the Phase 7 canary rollout deploy through."
+#
+# This file itself is applied once, by hand (kubectl apply -n argocd -f
+# infra/k8s/inference/argocd-application.yaml) -- it's the one manifest in
+# this folder that Argo CD doesn't sync for itself, the same way no GitOps
+# tool can bootstrap its own first Application from GitOps.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: garbhaai-inference
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Hrishi0929/garbhaai-platform.git
+    targetRevision: main
+    path: infra/k8s/inference
+    # Only the workload manifests are meant to be synced here -- this
+    # Application file describing itself, if it ever ended up in this same
+    # folder, would be a classic "app syncing itself" footgun. It
+    # deliberately isn't: it's applied by hand, once, as the comment above
+    # says.
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: garbhaai
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

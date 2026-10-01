@@ -1,0 +1,35 @@
+# ClusterIP is enough for local verification (kubectl port-forward); kind
+# has no cloud load-balancer to back a LoadBalancer-type Service, and
+# nothing outside the cluster needs to reach this directly in this phase.
+apiVersion: v1
+kind: Service
+metadata:
+  name: garbhaai-inference
+  namespace: garbhaai
+  labels:
+    app: garbhaai-inference
+spec:
+  selector:
+    app: garbhaai-inference
+  ports:
+    - port: 80
+      targetPort: 8000
+  type: ClusterIP
+---
+# Local-dev-only RustFS/Postgres credentials, same ones
+# infra/local/docker-compose.yml creates -- not secrets in the "rotate if
+# leaked" sense, just kept out of the Rollout spec itself since that's
+# still the right pattern even for throwaway local creds.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: garbhaai-inference-secrets
+  namespace: garbhaai
+type: Opaque
+stringData:
+  AWS_ACCESS_KEY_ID: "garbhaai"
+  AWS_SECRET_ACCESS_KEY: "garbhaai_local_dev"
+  MLFLOW_S3_ENDPOINT_URL: "http://host.docker.internal:9000"
+  POSTGRES_DB: "garbhaai"
+  POSTGRES_USER: "garbhaai"
+  POSTGRES_PASSWORD: "garbhaai_local_dev"

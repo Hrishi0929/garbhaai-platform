@@ -1,0 +1,9 @@
+# See training_engine/requirements.txt -- same reasoning for mlflow-skinny
+# (host-run script coexisting with a venv that may already have full
+# mlflow installed -- loose range, not an exact pin).
+mlflow-skinny>=2.17.0,<4
+torch>=2.6.0
+
+# search_model_versions()/download_artifacts() -- same lazy-import-only-
+# when-called gap as training_engine and eval_engine, see promote.py.
+boto3>=1.35,<2

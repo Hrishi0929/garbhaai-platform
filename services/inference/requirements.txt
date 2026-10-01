@@ -6,3 +6,11 @@ numpy==1.26.4
 torch==2.4.1
 psycopg2-binary==2.9.9
 httpx==0.27.2
+
+# Phase 7: pulls the "production"-aliased model from the MLflow registry at
+# startup (see main.py's load_checkpoint()). mlflow-skinny's S3 artifact
+# repo imports boto3 lazily, only inside download_artifacts() -- same gap
+# documented in training_engine/requirements.txt -- so it's listed
+# explicitly rather than left to a transitive install.
+mlflow-skinny==3.16.1
+boto3==1.35.36

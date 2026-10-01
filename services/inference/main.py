@@ -7,11 +7,20 @@ classifier-head half of DayConditionedClassifier, and image_hash) and
 src/records_store.py (the accept/override review flow, and the
 image-hash-based "never contradict a decision on an image we've already
 seen" cache) -- but records_store's local JSON file becomes the
-`grade_records` Postgres table here, and the model itself is loaded
-from a checkpoint bundled into this service's image (model/unified_day3_day4_classifier.pt)
-rather than a local path. Phase 6 (MLflow) is expected to replace this
-bundled-file loading with a real model registry pull -- this is a
-deliberate placeholder, not the final design.
+`grade_records` Postgres table here.
+
+Phase 7: the model is now pulled from the MLflow registry at startup --
+specifically, whichever version currently holds the "production" alias
+of the garbhaai-day-classifier registered model (see
+training/promote_engine/promote.py, which is the only thing that ever
+moves that alias). The bundled checkpoint
+(model/unified_day3_day4_classifier.pt) is kept as a local-dev fallback
+for when MLflow is unreachable (offline laptop work, a fresh clone
+before any training run has happened) -- not the primary path anymore.
+load_checkpoint() tries the registry first and only falls back on
+failure, logging loudly either way so it's never ambiguous from the
+logs (or from GET /health, which reports the source and version) which
+one a given pod is actually serving.
 
 Does NOT reimplement the ResNet18 backbone -- the checkpoint only ever
 held the classifier head (Linear(514, 3): 512 backbone features + a
@@ -30,7 +39,9 @@ rather than silently producing a meaningless prediction for it.
 import hashlib
 import io
 import json
+import logging
 import os
+import tempfile
 from datetime import datetime, timezone
 
 import httpx
@@ -42,6 +53,9 @@ import torch.nn as nn
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from PIL import Image
 
+logger = logging.getLogger("garbhaai.inference")
+logging.basicConfig(level=logging.INFO)
+
 app = FastAPI(title="garbhaai-inference")
 
 FEATURE_EXTRACTION_URL = os.environ.get("FEATURE_EXTRACTION_URL", "http://localhost:8004")
@@ -49,6 +63,28 @@ MODEL_CHECKPOINT_PATH = os.environ.get(
     "MODEL_CHECKPOINT_PATH",
     os.path.join(os.path.dirname(__file__), "model", "unified_day3_day4_classifier.pt"),
 )
+
+# --- MLflow registry pull (Phase 7) ---------------------------------------
+# Same registered-model name train.py writes to and promote.py promotes
+# within. "production" is an alias (mlflow.set_registered_model_alias), not
+# a legacy numbered stage -- MLflow deprecated
+# transition_model_version_stage back in 2.9.0 (confirmed against the
+# actual installed mlflow-skinny 3.16.1 source: the method is still present
+# but carries a @deprecated decorator), so promote.py and this file both
+# use the alias API, which is the maintained one.
+MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5500")
+MODEL_REGISTRY_NAME = "garbhaai-day-classifier"
+MODEL_ALIAS = os.environ.get("MODEL_ALIAS", "production")
+
+# Same local-dev-only RustFS credentials as train.py/evaluate.py/promote.py
+# -- see train.py's comment for the full explanation of why this is needed
+# outside Docker at all. Inside the kind cluster this is instead set for
+# real via the Rollout's env (infra/k8s/inference/rollout.yaml), pointed at
+# host.docker.internal since RustFS still runs in docker-compose on the
+# Mac host, not inside the cluster.
+os.environ.setdefault("AWS_ACCESS_KEY_ID", "garbhaai")
+os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "garbhaai_local_dev")
+os.environ.setdefault("MLFLOW_S3_ENDPOINT_URL", "http://localhost:9000")
 
 POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "localhost")
 POSTGRES_PORT = os.environ.get("POSTGRES_PORT", "5432")
@@ -79,10 +115,65 @@ def compute_image_hash(image_bytes: bytes) -> str:
     return hashlib.md5(image_bytes).hexdigest()[:8]
 
 
+def _load_checkpoint_from_registry() -> tuple:
+    """Downloads whichever version currently holds the MODEL_ALIAS alias
+    of MODEL_REGISTRY_NAME and loads it. Raises on any failure (unreachable
+    MLflow, no version holds that alias yet, a malformed artifact) --
+    load_checkpoint() is what decides whether to fall back, this function
+    just tries the real thing and reports exactly what it got."""
+    import mlflow  # imported lazily so a from-bundle-only dev environment
+    from mlflow.tracking import MlflowClient  # never needs mlflow installed at all
+
+    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+    client = MlflowClient()
+    mv = client.get_model_version_by_alias(MODEL_REGISTRY_NAME, MODEL_ALIAS)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        artifacts = [a.path for a in client.list_artifacts(mv.run_id)]
+        checkpoint_name = next((a for a in artifacts if a.endswith(".pt")), None)
+        if checkpoint_name is None:
+            raise RuntimeError(
+                f"registered version {mv.version} (run {mv.run_id}) has no .pt artifact "
+                f"(artifacts found: {artifacts})"
+            )
+        local_path = client.download_artifacts(mv.run_id, checkpoint_name, tmp)
+        ckpt = torch.load(local_path, map_location="cpu", weights_only=False)
+
+    source_info = {
+        "source": "registry",
+        "registered_model": MODEL_REGISTRY_NAME,
+        "alias": MODEL_ALIAS,
+        "version": mv.version,
+        "run_id": mv.run_id,
+    }
+    return ckpt, source_info
+
+
+def _load_checkpoint_from_bundle() -> tuple:
+    ckpt = torch.load(MODEL_CHECKPOINT_PATH, map_location="cpu", weights_only=False)
+    source_info = {"source": "bundled_fallback", "path": MODEL_CHECKPOINT_PATH}
+    return ckpt, source_info
+
+
 def load_checkpoint() -> dict:
     if "checkpoint" not in _checkpoint_cache:
-        ckpt = torch.load(MODEL_CHECKPOINT_PATH, map_location="cpu", weights_only=False)
+        try:
+            ckpt, source_info = _load_checkpoint_from_registry()
+            logger.info(
+                "loaded model from MLflow registry: %s version %s (alias=%s, run=%s)",
+                MODEL_REGISTRY_NAME, source_info["version"], MODEL_ALIAS, source_info["run_id"],
+            )
+        except Exception as exc:
+            logger.warning(
+                "could not load model from MLflow registry (%s) -- falling back to the "
+                "bundled checkpoint at %s. This is expected in local dev before any "
+                "training run exists; it should NOT happen in a deployed environment "
+                "once Phase 6/7 have run.",
+                exc, MODEL_CHECKPOINT_PATH,
+            )
+            ckpt, source_info = _load_checkpoint_from_bundle()
         _checkpoint_cache["checkpoint"] = ckpt
+        _checkpoint_cache["source_info"] = source_info
     return _checkpoint_cache["checkpoint"]
 
 
@@ -153,7 +244,15 @@ def fetch_existing_record(db, image_hash: str):
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    # Loads the model if this is the first request to hit this pod (same
+    # lazy-cache path /grade uses) specifically so /health can report which
+    # model is actually serving -- registry version vs. the bundled
+    # fallback -- without needing a /grade request first. This is the
+    # signal Phase 7's canary verification relies on: curling a specific
+    # pod's /health after a promotion confirms it picked up the new
+    # version rather than assuming so from the Rollout status alone.
+    load_checkpoint()
+    return {"status": "ok", "model": _checkpoint_cache.get("source_info")}
 
 
 @app.post("/grade")
