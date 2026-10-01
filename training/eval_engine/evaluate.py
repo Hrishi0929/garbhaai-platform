@@ -42,6 +42,17 @@ from mlflow.tracking import MlflowClient
 MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5500")
 MLFLOW_EXPERIMENT = "garbhaai_embryo_grading"
 
+# check_structure() downloads the checkpoint artifact from RustFS (the S3-
+# compatible store behind MLFLOW_TRACKING_URI) via boto3 -- same gap as
+# training_engine/train.py's log_artifact() call: these are plain AWS env
+# vars boto3 reads directly, which only exist automatically inside Docker
+# (infra/local/docker-compose.yml sets them on the mlflow container itself,
+# not on anything run from the host). Same local-dev-only RustFS creds
+# docker-compose.yml uses. setdefault so a real env var still wins.
+os.environ.setdefault("AWS_ACCESS_KEY_ID", "garbhaai")
+os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "garbhaai_local_dev")
+os.environ.setdefault("MLFLOW_S3_ENDPOINT_URL", "http://localhost:9000")
+
 EXPECTED_CLASS_NAMES = ["A", "B", "C"]
 EXPECTED_DAY_KEYS = {"day3", "day4"}
 EXPECTED_HEAD_SHAPE = (3, 514)  # 3 classes x (512 features + 2-dim day one-hot)

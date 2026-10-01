@@ -4,8 +4,22 @@
 # server-side/UI dependencies. Avoids pulling in pyarrow<18, which has no
 # prebuilt wheel for newer Python versions (e.g. 3.13) and fails to build
 # from source in a plain venv.
-mlflow-skinny==2.17.0
+#
+# Deliberately unpinned to a wide range (verified against both ends --
+# every API this project calls exists in both 2.17.0 and 3.16.1): a tight
+# exact pin here clashes with whatever full `mlflow` (or other project
+# dependency) already resolved a different mlflow-skinny version into a
+# shared venv, which is exactly what happened during real testing of this
+# file. Let pip pick whatever's already compatible.
+mlflow-skinny>=2.17.0,<4
 numpy>=1.26,<3
 torch>=2.6.0
-requests==2.32.3
+requests>=2.32.4
 scikit-learn>=1.5
+
+# mlflow-skinny's S3 artifact repo (used here because the MLflow server's
+# --default-artifact-root is s3://garbhaai-images/... on RustFS) imports
+# boto3 lazily, only inside log_artifact/log_model -- so a plain
+# `pip install -r` + quick smoke test won't catch a missing boto3 until
+# the actual mlflow.log_artifact() call at the end of a real training run.
+boto3>=1.35,<2

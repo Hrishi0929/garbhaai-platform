@@ -56,6 +56,20 @@ MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:55
 MLFLOW_EXPERIMENT = "garbhaai_embryo_grading"
 MODEL_REGISTRY_NAME = "garbhaai-day-classifier"
 
+# mlflow.log_artifact()/register_model() write to RustFS (the S3-compatible
+# artifact store behind MLFLOW_TRACKING_URI) via boto3, which reads these
+# as plain AWS env vars -- it has no idea they're actually RustFS creds.
+# Inside Docker, the mlflow server container gets them from its own
+# environment (infra/local/docker-compose.yml); a host-run train.py has no
+# such environment, so without this it fails with NoCredentialsError only
+# at the very end of a run, after LOOCV has already finished. These are
+# the same local-dev-only credentials docker-compose.yml uses -- not
+# secrets, just matching the fixed RustFS admin user infra/local creates.
+# setdefault so a real env var (e.g. a different host) still wins.
+os.environ.setdefault("AWS_ACCESS_KEY_ID", "garbhaai")
+os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "garbhaai_local_dev")
+os.environ.setdefault("MLFLOW_S3_ENDPOINT_URL", "http://localhost:9000")
+
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 CLASS_NAMES = ["A", "B", "C"]
 STAGES = ["day3", "day4"]  # day5 intentionally excluded -- different grading taxonomy
@@ -89,9 +103,18 @@ def load_stage(stage: str):
     for grade_dir in sorted(stage_dir.iterdir()):
         if not grade_dir.is_dir():
             continue
-        grade = grade_dir.name.replace("Grade ", "").strip()
+        # Grade subfolders aren't named consistently across days on disk --
+        # day3 is "Grade A"/"Grade B"/"Grade C", but day4 is "Morula Grade
+        # A"/... (and day5, if ever added, is "Blastocyst Grade A"/...).
+        # Take the trailing whitespace-separated token rather than just
+        # stripping the literal "Grade " prefix, so both forms resolve to
+        # the bare class letter. A plain substring replace here silently
+        # dropped every day4 folder (its name became "Morula A", which
+        # isn't in CLASS_NAMES) and made load_stage("day4") return 0
+        # images with no error.
+        grade = grade_dir.name.strip().split()[-1]
         if grade not in CLASS_NAMES:
-            continue  # defensive -- day3/day4 folders are plain A/B/C only
+            continue  # defensive -- truly unrelated folders (not a grade)
         label = CLASS_NAMES.index(grade)
         for f in sorted(grade_dir.iterdir()):
             if f.suffix.lower() not in IMAGE_EXTENSIONS:
@@ -99,6 +122,14 @@ def load_stage(stage: str):
             features.append(extract_features(f))
             labels.append(label)
             image_ids.append(f.stem)
+
+    if not features:
+        raise SystemExit(
+            f"no images found under {stage_dir} (checked subfolders: "
+            f"{[d.name for d in sorted(stage_dir.iterdir()) if d.is_dir()]}) -- "
+            f"refusing to continue with an empty stage rather than silently "
+            f"producing a malformed feature array."
+        )
 
     X = np.asarray(features, dtype=np.float32)
     y = np.asarray(labels, dtype=np.int64)
