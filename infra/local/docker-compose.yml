@@ -7,6 +7,11 @@
 #              Oct 2025; RustFS is an actively-maintained, openly
 #              distributed drop-in replacement with the same S3 API.
 #   redis    -> Memorystore (Feast online feature store + app caching)
+#   mlflow   -> Vertex AI Experiments / a managed MLflow service (Phase 6:
+#              experiment tracking + model registry). Backed by the same
+#              postgres (backend store) and rustfs (artifact store, under
+#              the mlflow-artifacts/ prefix of the existing bucket) --
+#              zero extra infra for a local-dev tracking server.
 #
 # Usage:
 #   cd infra/local
@@ -80,3 +85,32 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  mlflow:
+    build: ./mlflow
+    container_name: garbhaai-mlflow
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rustfs:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: garbhaai
+      AWS_SECRET_ACCESS_KEY: garbhaai_local_dev
+      MLFLOW_S3_ENDPOINT_URL: http://rustfs:9000
+    ports:
+      - "5500:5000"
+    command: >
+      mlflow server
+      --backend-store-uri postgresql://garbhaai:garbhaai_local_dev@postgres:5432/garbhaai
+      --default-artifact-root s3://garbhaai-images/mlflow-artifacts
+      --host 0.0.0.0
+      --port 5000
+      --serve-artifacts
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s

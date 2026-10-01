@@ -26,3 +26,24 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
           docker tag ${{ matrix.service }}:${{ github.sha }} ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}:${{ github.sha }}
           docker push ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}:${{ github.sha }}
+
+  training-eval-engine:
+    # training_engine/train.py and eval_engine/evaluate.py aren't deployed
+    # services (no Dockerfile, no matrix entry) -- they're run manually per
+    # the Phase 6 runbook, since they need the live MLflow server and
+    # feature-extraction service, which this CI job doesn't stand up. But
+    # eval_engine's own unit tests (checkpoint structure / metric
+    # completeness validation) are pure and network-free, so there's no
+    # reason not to run those here.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - name: Install deps
+        run: |
+          pip install -r training/eval_engine/requirements.txt flake8 pytest
+      - name: Lint
+        run: flake8 training/training_engine training/eval_engine
+      - name: Test eval_engine
+        run: pytest training/eval_engine/tests

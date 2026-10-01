@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Phase 2 exit-gate helper: brings up postgres/rustfs/redis and creates
-# the garbhaai-images bucket in RustFS (our S3-compatible object store).
+# Phase 2/6 exit-gate helper: brings up postgres/rustfs/redis/mlflow and
+# creates the garbhaai-images bucket in RustFS (our S3-compatible object
+# store). mlflow is built from infra/local/mlflow/Dockerfile on first run,
+# which takes longer than the other services -- that's expected.
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
-echo "==> Starting postgres, rustfs, redis..."
-docker compose up -d
+echo "==> Starting postgres, rustfs, redis, mlflow..."
+docker compose up -d --build
 
 echo "==> Waiting for services to report healthy..."
 for i in $(seq 1 30); do
@@ -30,3 +32,4 @@ echo "==> Done. Services:"
 echo "  Postgres    -> localhost:5432  (user: garbhaai / db: garbhaai)"
 echo "  RustFS API  -> localhost:9000  (console: http://localhost:9001, bucket: garbhaai-images)"
 echo "  Redis       -> localhost:6379"
+echo "  MLflow      -> http://localhost:5500"

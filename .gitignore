@@ -22,3 +22,5 @@ training/feature_repo/.feast/
 # Great Expectations / data quality local artifacts
 training/data_quality/manifest.csv
 infra/local/marquez/.volumes/
+training/training_engine/outputs/
+mlflow.db
