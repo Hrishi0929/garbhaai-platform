@@ -189,7 +189,10 @@ def get_feast_store() -> FeatureStore:
             project=FEAST_PROJECT,
             provider="local",
             registry=FEAST_REGISTRY_PATH,
-            online_store={"type": "redis", "connection_string": f"{FEAST_REDIS_HOST}:{FEAST_REDIS_PORT}"},
+            online_store={
+                "type": "redis",
+                "connection_string": f"{FEAST_REDIS_HOST}:{FEAST_REDIS_PORT}",
+            },
             offline_store={"type": "file"},
             entity_key_serialization_version=3,
         )
