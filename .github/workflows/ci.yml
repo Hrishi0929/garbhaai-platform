@@ -1,5 +1,8 @@
 name: CI
 
+permissions:
+  contents: read
+  packages: write
 # Originally pull_request-only (the runbook's L3 spec) -- but every commit
 # on this project has gone straight to main via `git push`, never through
 # a PR, so this workflow had never once fired (confirmed: an empty Actions
