@@ -1,17 +1,36 @@
 name: CI
 
-on: [pull_request]
+# Originally pull_request-only (the runbook's L3 spec) -- but every commit
+# on this project has gone straight to main via `git push`, never through
+# a PR, so this workflow had never once fired (confirmed: an empty Actions
+# tab, and a test (test_health, see services/inference/tests/test_main.py)
+# that had been silently broken since Phase 7 because nothing was ever
+# running it). Adding push-to-main so it actually runs on the workflow
+# this project really uses, without giving up pull_request coverage for
+# if/when PRs start being used.
+on:
+  pull_request:
+  push:
+    branches: [main]
 
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        service: [ui, ingestion, quality-check, preprocessing, feature-extraction, inference]
+        service:
+          [
+            ui,
+            ingestion,
+            quality-check,
+            preprocessing,
+            feature-extraction,
+            inference,
+          ]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: '3.11' }
+        with: { python-version: "3.11" }
       - name: Install deps
         run: pip install -r services/${{ matrix.service }}/requirements.txt flake8 pytest
       - name: Lint
@@ -39,7 +58,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: '3.11' }
+        with: { python-version: "3.11" }
       - name: Install deps
         run: |
           pip install -r training/eval_engine/requirements.txt flake8 pytest

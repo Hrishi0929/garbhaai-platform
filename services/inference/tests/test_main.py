@@ -75,7 +75,17 @@ def _make_image_bytes(color=(50, 60, 70)):
 
 
 def test_health():
-    assert client.get("/health").json() == {"status": "ok"}
+    # Phase 7 widened /health to also report which model is serving
+    # (registry vs. bundled fallback -- see main.py's load_checkpoint()
+    # docstring); this used to assert the pre-Phase-7 exact shape
+    # ({"status": "ok"}) and would have failed the moment CI actually ran
+    # a test against it. In CI there's no reachable MLflow registry, so
+    # this always resolves to the bundled fallback -- asserted on the
+    # stable parts of that shape rather than a model-version number that
+    # has no reason to be any particular value here.
+    body = client.get("/health").json()
+    assert body["status"] == "ok"
+    assert body["model"]["source"] in ("registry", "bundled_fallback")
 
 
 def test_compute_image_hash_matches_ingestion_convention():
