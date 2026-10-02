@@ -43,8 +43,15 @@ jobs:
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker tag ${{ matrix.service }}:${{ github.sha }} ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}:${{ github.sha }}
-          docker push ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}:${{ github.sha }}
+          # Docker/OCI image references must be all-lowercase, but
+          # github.repository_owner resolves to the real GitHub username
+          # (Hrishi0929, capital H) -- this step only ever runs on a push
+          # to main (see the `if:` above), which is exactly what the
+          # previous CI fix just enabled for the first time, so nothing
+          # had ever caught this either.
+          OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          docker tag ${{ matrix.service }}:${{ github.sha }} ghcr.io/$OWNER_LC/${{ matrix.service }}:${{ github.sha }}
+          docker push ghcr.io/$OWNER_LC/${{ matrix.service }}:${{ github.sha }}
 
   training-eval-engine:
     # training_engine/train.py and eval_engine/evaluate.py aren't deployed
