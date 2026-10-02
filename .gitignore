@@ -1,26 +1,26 @@
+# Python
 __pycache__/
 *.pyc
 .venv/
-.env
-.DS_Store
-node_modules/
-*.log
+venv/
 
-# DVC / data -- tracked via DVC, not git
-/data/
-.dvc/cache
-.dvc/tmp
+# Phase 8: both services/inference and training/drift_engine build their
+# own FeatureStore purely in Python (no feature_store.yaml) and need a
+# local sqlite registry + a dummy offline-store parquet to satisfy
+# FileSource's validation -- see services/inference/feast_schema.py's
+# docstring and training/drift_engine/detect_drift.py's get_feast_store().
+# Neither is ever read for real data; both regenerate on first run.
+feast_registry.db
+feast_offline_placeholder.parquet
 
-# local infra state
-infra/local/.volumes/
+# training/drift_engine/compute_baseline.py's output (also re-logged to
+# MLflow as the artifact of record -- these local copies are scratch)
+training/drift_engine/outputs/
+training/drift_engine/logs/
 
-# Feast local dev artifacts
-training/feature_repo/data/registry.db
-training/feature_repo/data/*.parquet
-training/feature_repo/.feast/
-
-# Great Expectations / data quality local artifacts
-training/data_quality/manifest.csv
-infra/local/marquez/.volumes/
+# training_engine/eval_engine output dirs (checkpoints/metrics -- the
+# artifact of record lives in MLflow, same reasoning as above)
 training/training_engine/outputs/
-mlflow.db
+
+# OS cruft
+.DS_Store

@@ -1,0 +1,16 @@
+# See training_engine/requirements.txt -- same reasoning for mlflow-skinny
+# (tracking/registry client API only, avoids pulling in pyarrow<18) and for
+# leaving the range unpinned rather than an exact version.
+mlflow-skinny>=2.17.0,<4
+numpy>=1.26,<3
+requests>=2.32.4
+
+# compute_baseline.py's client.log_artifact() call uploads to RustFS (S3-
+# compatible) via boto3, imported lazily only inside that call -- same gap
+# as training_engine/train.py and eval_engine/evaluate.py.
+boto3>=1.35,<2
+
+# detect_drift.py (next): reads live embeddings back out of Feast's Redis
+# online store and writes drift results to Postgres.
+feast[redis]>=0.47,<1
+psycopg2-binary>=2.9,<3

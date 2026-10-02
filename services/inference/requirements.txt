@@ -14,3 +14,13 @@ httpx==0.27.2
 # explicitly rather than left to a transitive install.
 mlflow-skinny==3.16.1
 boto3==1.35.36
+
+# Phase 8: pushes each live prediction's embedding into Feast's online
+# store (see main.py's _push_to_feast()). Verified installing cleanly
+# alongside everything above (no resolver conflicts) in a throwaway venv
+# before pinning here. pandas/redis are feast[redis]'s own transitive
+# deps but are imported directly in main.py, so listed explicitly rather
+# than relied on implicitly.
+feast[redis]==0.47.0
+pandas==2.3.3
+redis==4.6.0

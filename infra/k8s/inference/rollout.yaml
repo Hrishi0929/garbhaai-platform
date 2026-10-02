@@ -39,8 +39,8 @@ spec:
         # the MLflow alias alone would do nothing: a running pod has
         # already loaded its checkpoint into _checkpoint_cache and has no
         # reason to look again.
-        garbhaai.io/model-version: "1"
-        garbhaai.io/model-run-id: "036d6a1379494644992924eb7abf20c0"
+        garbhaai.io/model-version: "0"
+        garbhaai.io/model-run-id: ""
     spec:
       containers:
         - name: inference
@@ -64,6 +64,14 @@ spec:
               value: "host.docker.internal"
             - name: MODEL_ALIAS
               value: "production"
+            # Phase 8: same host.docker.internal pattern above, now for the
+            # Redis container Feast's online store runs on -- see main.py's
+            # _push_to_feast()/get_feast_store(). Port matches the
+            # "6379:6379" mapping in infra/local/docker-compose.yml.
+            - name: FEAST_REDIS_HOST
+              value: "host.docker.internal"
+            - name: FEAST_REDIS_PORT
+              value: "6379"
           envFrom:
             - secretRef:
                 name: garbhaai-inference-secrets

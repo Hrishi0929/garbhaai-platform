@@ -1,9 +1,13 @@
 """
 Generates a tiny placeholder parquet file so Feast has something to apply
-and materialize against before the real feature-extraction service
-(Phase 4) exists. Columns are a stand-in for what that service will
-eventually write: per-image features derived from the embryo photo plus
-a timestamp Feast needs for point-in-time correctness.
+and materialize against. This offline file is still only ever used to
+satisfy FileSource's validation at `feast apply` time -- as of Phase 8,
+real data reaches the online store exclusively through
+services/inference/main.py's live write_to_online_store() calls after
+each prediction, never through this file or `feast materialize`. This
+script (and the old materialize-incremental flow in this folder's
+README) is kept only as a way to smoke-test the Feast <-> Redis wiring
+in isolation, without needing the full inference service running.
 
 Run once: python generate_sample_data.py
 
@@ -25,8 +29,8 @@ def main():
             "image_id": f"GBR_PLACEHOLDER_{i:03d}",
             "event_timestamp": now - timedelta(minutes=10 - i),
             "day": 3 if i % 2 == 0 else 4,
-            "blur_score": 0.1 * i,          # stand-in for the quality-check service's output
             "model_confidence": 0.5 + 0.02 * i,  # stand-in for the last inference's confidence
+            "embedding": [0.1 * i] * 512,         # stand-in for a real ResNet18 feature vector
         })
 
     df = pd.DataFrame(rows)

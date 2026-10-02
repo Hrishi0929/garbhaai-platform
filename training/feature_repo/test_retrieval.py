@@ -19,15 +19,18 @@ def main():
     result = store.get_online_features(
         features=[
             "image_features:day",
-            "image_features:blur_score",
             "image_features:model_confidence",
+            "image_features:embedding",
         ],
         entity_rows=[{"image_id": "GBR_PLACEHOLDER_005"}],
     ).to_dict()
 
-    print(result)
+    print({k: (v if k != "embedding" else f"<{len(v[0]) if v[0] else 0}-dim vector>") for k, v in result.items()})
     assert result["model_confidence"][0] is not None, "Feature retrieval returned None -- materialization likely didn't run"
-    print("\nOK -- Feast served a real feature value back from Redis.")
+    assert result["embedding"][0] is not None and len(result["embedding"][0]) == 512, (
+        "embedding missing or wrong length -- materialization likely didn't run"
+    )
+    print("\nOK -- Feast served a real feature value (including the 512-dim embedding) back from Redis.")
 
 
 if __name__ == "__main__":
