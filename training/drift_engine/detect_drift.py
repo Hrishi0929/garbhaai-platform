@@ -233,21 +233,69 @@ def load_baseline(client: MlflowClient, run_id: str) -> dict:
     return baseline
 
 
-def compute_psi(live: np.ndarray, bucket_edges: np.ndarray, baseline_bin_proportions: np.ndarray, epsilon: float) -> tuple:
+def _merge_buckets(bucket_edges: np.ndarray, bin_proportions: np.ndarray, group_size: int) -> tuple:
+    """Coarsens compute_baseline.py's 10 decile buckets into n_buckets //
+    group_size wider buckets, by summing group_size consecutive buckets'
+    proportions and keeping every group_size-th edge. group_size must
+    evenly divide the original bucket count (10 -> group sizes 1, 2, 5, 10
+    all divide evenly)."""
+    n_buckets = bin_proportions.shape[0]
+    n_groups = n_buckets // group_size
+    new_edges = np.concatenate([bucket_edges[:-1:group_size], bucket_edges[-1:]])
+    new_props = bin_proportions.reshape(n_groups, group_size, -1).sum(axis=1)
+    return new_edges, new_props
+
+
+def compute_psi(live: np.ndarray, bucket_edges: np.ndarray, baseline_bin_proportions: np.ndarray, epsilon: float, n_baseline: int = None) -> tuple:
     """Buckets `live` with the SAME edges compute_baseline.py computed from
     the training set, then compares per-bucket proportions dimension by
-    dimension. Returns (mean_psi_across_dims, max_psi_across_dims)."""
-    n_buckets, n_dims = baseline_bin_proportions.shape
+    dimension. Returns (mean_psi_across_dims, max_psi_across_dims).
+
+    Adaptively coarsens the bucket count based on samples-per-bucket on
+    BOTH sides, rather than always using compute_baseline.py's full 10
+    deciles. This was added after a real false positive: with only 12 live
+    samples split across 10 buckets per dimension, ~1/3 of (bucket,
+    dimension) cells land on zero live samples purely by chance, and each
+    empty bucket's epsilon-clipped ratio contributes a large, spurious PSI
+    value -- verified directly: simulating a live sample drawn from the
+    EXACT SAME distribution as the baseline still produced a mean PSI of
+    ~2.6 with 10 buckets, nowhere near the "no drift" PSI should show.
+    Coarsening based on live sample size alone isn't enough, though: this
+    project's baseline itself is built from a small local-dev training set
+    (30 embeddings in the real run that surfaced this bug) -- 10 buckets
+    over 30 samples is already only ~3 samples/bucket, noisy quantile
+    edges and noisy baseline proportions on their own. Re-ran the same
+    same-distribution check with n_live=60 (which the naive live-only
+    rule treated as "enough" for the full 10 buckets) against that same
+    30-sample baseline and still got mean PSI~0.55 -- a false positive
+    purely from the baseline side. So the bucket count here is chosen
+    from whichever of n_live/n_baseline is smaller: confirmed this keeps
+    the same-distribution case at ~0.05 (not flagged) for the real
+    n_live=12/n_baseline=30 scenario, while a genuinely shifted sample
+    still comes back at ~4.5 (flagged) -- not a principled optimum, just
+    enough that empty/sparse buckets stop dominating at the dataset sizes
+    this local-dev project actually has."""
     n_live = live.shape[0]
+    n_baseline_samples = n_baseline if n_baseline is not None else baseline_bin_proportions.shape[0] * 10  # conservative guess if caller didn't pass it
+    limiting_n = min(n_live, n_baseline_samples)
+    if limiting_n >= 50:
+        group_size = 1
+    elif limiting_n >= 20:
+        group_size = 2
+    else:
+        group_size = 5
+    edges, base_proportions = _merge_buckets(bucket_edges, baseline_bin_proportions, group_size)
+
+    n_buckets, n_dims = base_proportions.shape
     live_bin_counts = np.zeros((n_buckets, n_dims), dtype=np.float64)
     for dim in range(n_dims):
-        bin_idx = np.digitize(live[:, dim], bucket_edges[1:-1, dim], right=False)
+        bin_idx = np.digitize(live[:, dim], edges[1:-1, dim], right=False)
         bin_idx = np.clip(bin_idx, 0, n_buckets - 1)  # a live value outside the baseline's observed range
         for b in range(n_buckets):
             live_bin_counts[b, dim] = np.sum(bin_idx == b)
     live_bin_proportions = live_bin_counts / n_live
 
-    base_p = np.clip(baseline_bin_proportions, epsilon, None)
+    base_p = np.clip(base_proportions, epsilon, None)
     live_p = np.clip(live_bin_proportions, epsilon, None)
     psi_per_dim = np.sum((live_p - base_p) * np.log(live_p / base_p), axis=0)  # (n_dims,)
     return float(np.mean(psi_per_dim)), float(np.max(psi_per_dim))
@@ -383,7 +431,7 @@ def main():
 
     summary = baseline["summary"]
     epsilon = summary.get("psi_epsilon", 1e-4)
-    mean_psi, max_psi = compute_psi(live, baseline["bucket_edges"], baseline["bin_proportions"], epsilon)
+    mean_psi, max_psi = compute_psi(live, baseline["bucket_edges"], baseline["bin_proportions"], epsilon, n_baseline=n_baseline)
     psi_flagged = mean_psi > PSI_THRESHOLD
 
     mmd_squared, mmd_p_value = compute_mmd(live, baseline["embeddings"], N_PERMUTATIONS)
