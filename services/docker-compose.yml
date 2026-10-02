@@ -15,6 +15,15 @@ services:
     build: ./quality-check
     ports:
       - "8002:8000"
+    environment:
+      # Phase 9 gap-closure: logs every check's {ok, warnings} to the
+      # quality_checks table, keyed by the same image_hash convention
+      # ingestion/inference use -- see main.py's module docstring.
+      POSTGRES_HOST: host.docker.internal
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: garbhaai
+      POSTGRES_USER: garbhaai
+      POSTGRES_PASSWORD: garbhaai_local_dev
 
   preprocessing:
     build: ./preprocessing
