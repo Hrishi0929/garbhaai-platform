@@ -48,6 +48,20 @@ spec:
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
+          # Grafana's "Namespace (Pods)" dashboard's Utilisation tiles (CPU/
+          # memory as % of request/limit) need a denominator to compute a
+          # percentage from -- without this block they correctly show "No
+          # data" rather than a made-up number. Values below are set from
+          # observed real usage (~3m CPU, ~300MiB memory per pod) with
+          # headroom, not load-tested; revisit if real traffic looks
+          # different.
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "384Mi"
+            limits:
+              cpu: "500m"
+              memory: "768Mi"
           env:
             # kind nodes run as Docker containers alongside the Mac's other
             # docker-compose services (Postgres/MLflow/RustFS/Redis, all
