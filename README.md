@@ -10,7 +10,7 @@ each piece runs. Swap list:
 |---------------------------|-------------------------------|------------------------------------------------------|
 | Object storage             | Cloud Storage                 | MinIO (Docker Compose)                               |
 | Operational database       | Cloud SQL (Postgres)          | Postgres (Docker Compose)                            |
-| Feature Store               | Vertex AI Feature Store       | Feast (open-source) + Redis                          |
+| Feature Store               | Vertex AI Feature Store       | Postgres `image_features` table                      |
 | Container registry          | Artifact Registry              | GitHub Container Registry (ghcr.io)                   |
 | CD target                   | GKE + Cloud Run                | kind (Kubernetes-in-Docker)                            |
 | Compute for services         | Cloud Run                      | Docker Compose / containers on kind                    |
@@ -31,7 +31,7 @@ they run on.
   boxes.
 - `infra/` -- Kubernetes manifests / Helm values / Docker Compose files
   for everything the services run on or talk to (Postgres, MinIO, Redis,
-  Feast, Marquez, Argo CD, Prometheus/Grafana).
+  Marquez, Argo CD, Prometheus/Grafana).
 - `training/` -- training & evaluation code (MLflow-tracked).
 - `.github/workflows/` -- CI (build/test/push per service) and any
   scheduled jobs (drift detection).

@@ -16,7 +16,7 @@ the correct way to reuse work across independently-deployable services.
 | `feature-extraction` | 8004 | `POST /extract-features` (multipart `file`) -> `{feature_dim, features}` | new -- backbone split out of the old fused classifier |
 | `ingestion` | 8001 | `POST /ingest` (form `patient_id`, `day` + multipart `file`) -> `{image_id, image_hash, storage_key, already_seen}` | `records_store` (local JSON/disk -> Postgres + RustFS) |
 | `inference` | 8005 | `POST /grade` (form `day` + multipart `file`) -> `{source, image_hash, grade, confidence, probabilities}`; `POST /review` (form fields) -> `{image_hash, final_grade, doctor_overridden}` | `grading_core`'s classifier head + `records_store`'s review/cache logic |
-| `ui` | 8511 | Streamlit app, calls the above over HTTP | `app.py` (thin client now, no business logic) |
+| `ui` (`ui-next/`) | 8511 | Next.js app; its server routes forward to the above over HTTP | `app/page.tsx` (thin client, no business logic) |
 
 All services also expose `GET /health`.
 

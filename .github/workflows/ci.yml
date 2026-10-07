@@ -1,16 +1,10 @@
 name: CI
 
-permissions:
-  contents: read
-  packages: write
 # Originally pull_request-only (the runbook's L3 spec) -- but every commit
 # on this project has gone straight to main via `git push`, never through
-# a PR, so this workflow had never once fired (confirmed: an empty Actions
-# tab, and a test (test_health, see services/inference/tests/test_main.py)
-# that had been silently broken since Phase 7 because nothing was ever
-# running it). Adding push-to-main so it actually runs on the workflow
-# this project really uses, without giving up pull_request coverage for
-# if/when PRs start being used.
+# a PR, so this workflow had never once fired. Adding push-to-main so it
+# actually runs on the workflow this project really uses, without giving up
+# pull_request coverage for if/when PRs start being used.
 on:
   pull_request:
   push:
@@ -21,19 +15,11 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        service:
-          [
-            ui,
-            ingestion,
-            quality-check,
-            preprocessing,
-            feature-extraction,
-            inference,
-          ]
+        service: [ingestion, quality-check, preprocessing, feature-extraction, inference]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: "3.11" }
+        with: { python-version: '3.11' }
       - name: Install deps
         run: pip install -r services/${{ matrix.service }}/requirements.txt flake8 pytest
       - name: Lint
@@ -46,29 +32,48 @@ jobs:
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          # Docker/OCI image references must be all-lowercase, but
-          # github.repository_owner resolves to the real GitHub username
-          # (Hrishi0929, capital H) -- this step only ever runs on a push
-          # to main (see the `if:` above), which is exactly what the
-          # previous CI fix just enabled for the first time, so nothing
-          # had ever caught this either.
-          OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          docker tag ${{ matrix.service }}:${{ github.sha }} ghcr.io/$OWNER_LC/${{ matrix.service }}:${{ github.sha }}
-          docker push ghcr.io/$OWNER_LC/${{ matrix.service }}:${{ github.sha }}
+          docker tag ${{ matrix.service }}:${{ github.sha }} ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}:${{ github.sha }}
+          docker push ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}:${{ github.sha }}
+
+  ui-next:
+    # Next.js UI (replaces the old Streamlit `ui` service).
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/ui-next
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: services/ui-next/package-lock.json
+      - name: Install deps
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Build
+        run: npm run build
+      - name: Build image
+        run: docker build -t ui-next:${{ github.sha }} .
+      - name: Push to GHCR (on merge to main)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          docker tag ui-next:${{ github.sha }} ghcr.io/${{ github.repository_owner }}/ui-next:${{ github.sha }}
+          docker push ghcr.io/${{ github.repository_owner }}/ui-next:${{ github.sha }}
 
   training-eval-engine:
     # training_engine/train.py and eval_engine/evaluate.py aren't deployed
     # services (no Dockerfile, no matrix entry) -- they're run manually per
     # the Phase 6 runbook, since they need the live MLflow server and
     # feature-extraction service, which this CI job doesn't stand up. But
-    # eval_engine's own unit tests (checkpoint structure / metric
-    # completeness validation) are pure and network-free, so there's no
-    # reason not to run those here.
+    # eval_engine's own unit tests are pure and network-free, so they run here.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: "3.11" }
+        with: { python-version: '3.11' }
       - name: Install deps
         run: |
           pip install -r training/eval_engine/requirements.txt flake8 pytest

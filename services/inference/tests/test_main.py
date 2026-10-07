@@ -14,7 +14,9 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from main import app, compute_image_hash, get_db_conn, load_checkpoint, predict_grade
+from main import (
+    _push_features, app, compute_image_hash, get_db_conn, load_checkpoint, predict_grade,
+)
 
 client = TestClient(app)
 
@@ -181,3 +183,55 @@ def test_review_upserts_record():
         assert fake_conn.committed is True
     finally:
         app.dependency_overrides.clear()
+
+
+class RecordingConn:
+    """Captures what _push_features sends to Postgres, and can be told to
+    fail, to prove a database problem never escapes into a grading request."""
+
+    def __init__(self, fail=False):
+        self.fail = fail
+        self.executed = []
+        self.committed = False
+        self.rolled_back = False
+
+    def cursor(self):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def execute(self, sql, params=None):
+        if self.fail:
+            raise RuntimeError("database is down")
+        self.executed.append((sql, params))
+
+    def commit(self):
+        self.committed = True
+
+    def rollback(self):
+        self.rolled_back = True
+
+
+def test_push_features_upserts_one_row_per_image():
+    conn = RecordingConn()
+    features = [0.5] * 512
+    _push_features(conn, "abcd1234", 3, 0.62, features)
+
+    assert conn.committed
+    sql, params = conn.executed[0]
+    assert "INSERT INTO image_features" in sql
+    assert "ON CONFLICT (image_hash) DO UPDATE" in sql
+    image_hash, day, confidence, embedding, _timestamp = params
+    assert (image_hash, day, confidence) == ("abcd1234", 3, 0.62)
+    assert len(embedding) == 512 and all(isinstance(x, float) for x in embedding)
+
+
+def test_push_features_never_raises_when_database_fails():
+    conn = RecordingConn(fail=True)
+    _push_features(conn, "abcd1234", 3, 0.62, [0.0] * 512)  # must not raise
+    assert conn.rolled_back
+    assert not conn.committed

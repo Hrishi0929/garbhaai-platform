@@ -3,18 +3,16 @@ Phase 9 -- the first end-to-end smoke test (runbook's own phrase).
 
 Pushes one real (or synthetic) embryo image through the live stack and
 checks, in order, the runbook's own ten-item Phase 9 checklist. Self-
-contained on purpose (duplicates the Feast schema from
-services/inference/feast_schema.py rather than importing across the
-service boundary) -- same convention every other script in this repo
-follows (see e.g. training/drift_engine/detect_drift.py's own schema
-duplication).
+contained on purpose (talks to the real services and databases directly,
+rather than importing from them) -- same convention every other script in
+this repo follows.
 
 What this script checks directly, by calling the real services and
-querying the real Postgres/Feast/MLflow state:
+querying the real Postgres/MLflow state:
   1. A row appears in Postgres (`images`) and the file lands in RustFS.
   2. A `quality_checks` row is written (Phase 9 gap-closure -- see
      services/quality-check/main.py).
-  4. The feature vector is readable back from Feast's online store.
+  4. The feature vector is stored in the Postgres `image_features` table.
   5. The inference API returns a grade + confidence.
   6. A doctor review ("accept" by default, or --override GRADE) writes
      to `grade_records`.
@@ -76,14 +74,6 @@ POSTGRES_PORT = os.environ.get("POSTGRES_PORT", "5432")
 POSTGRES_DB = os.environ.get("POSTGRES_DB", "garbhaai")
 POSTGRES_USER = os.environ.get("POSTGRES_USER", "garbhaai")
 POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "garbhaai_local_dev")
-
-# --- Feast / Redis (services/inference/feast_schema.py, duplicated) ---------
-FEAST_REDIS_HOST = os.environ.get("FEAST_REDIS_HOST", "localhost")
-FEAST_REDIS_PORT = os.environ.get("FEAST_REDIS_PORT", "6379")
-FEAST_PROJECT = "garbhaai"
-FEAST_REGISTRY_PATH = os.environ.get(
-    "FEAST_REGISTRY_PATH", os.path.join(os.path.dirname(__file__), "feast_registry.db")
-)
 
 # --- MLflow (infra/local/docker-compose.yml) ---------------------------------
 MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5500")
@@ -276,85 +266,32 @@ def step_verify_postgres(image_hash: str):
         conn.close()
 
 
-def step_verify_feast(image_hash: str):
-    _step(4, "Feast: feature vector is readable back from the online store (item 4)")
+def step_verify_features(image_hash: str):
+    _step(4, "Feature store: feature vector is stored in Postgres (item 4)")
     try:
-        from datetime import timedelta as _td
-
-        from feast import Entity, FeatureView, Field, FileSource
-        from feast.repo_config import RepoConfig
-        from feast.types import Array, Float32, Int64
-        from feast.value_type import ValueType
-        from feast import FeatureStore
-        import pandas as pd
-
-        embryo_image = Entity(
-            name="image_id",
-            value_type=ValueType.STRING,
-            description="Unique identifier for a single embryo image.",
-        )
-        offline_path = os.path.join(os.path.dirname(__file__), "feast_offline_placeholder.parquet")
-        if not os.path.exists(offline_path):
-            pd.DataFrame([{
-                "image_id": "unused",
-                "event_timestamp": datetime.now(timezone.utc),
-                "day": 0,
-                "model_confidence": 0.0,
-                "embedding": [0.0] * 512,
-            }]).to_parquet(offline_path)
-        image_features_source = FileSource(path=offline_path, timestamp_field="event_timestamp")
-        image_features_view = FeatureView(
-            name="image_features",
-            entities=[embryo_image],
-            ttl=_td(days=365),
-            schema=[
-                Field(name="day", dtype=Int64),
-                Field(name="model_confidence", dtype=Float32),
-                Field(name="embedding", dtype=Array(Float32)),
-            ],
-            online=True,
-            source=image_features_source,
-        )
-        config = RepoConfig(
-            project=FEAST_PROJECT,
-            provider="local",
-            registry=FEAST_REGISTRY_PATH,
-            online_store={
-                "type": "redis",
-                "connection_string": f"{FEAST_REDIS_HOST}:{FEAST_REDIS_PORT}",
-            },
-            offline_store={"type": "file"},
-            entity_key_serialization_version=3,
-        )
-        store = FeatureStore(config=config)
-        store.apply([embryo_image, image_features_view])
-
-        result = store.get_online_features(
-            features=[
-                "image_features:embedding",
-                "image_features:day",
-                "image_features:model_confidence",
-            ],
-            entity_rows=[{"image_id": image_hash}],
-        ).to_dict()
-
-        embedding = result["embedding"][0]
-        if embedding is None:
-            raise CheckFailed(
-                f"Feast returned no embedding for image_id={image_hash} -- "
-                f"either _push_to_feast() failed (check the inference pod's logs) "
-                f"or FEAST_REDIS_HOST/PORT here don't point at the same Redis the "
-                f"inference pod uses."
-            )
-        _ok(
-            f"get_online_features(image_id={image_hash}) -> "
-            f"embedding_dim={len(embedding)} day={result['day'][0]} "
-            f"model_confidence={result['model_confidence'][0]:.3f}"
-        )
-    except CheckFailed:
-        raise
+        conn = get_db_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT day, model_confidence, array_length(embedding, 1) "
+                    "FROM image_features WHERE image_hash = %s",
+                    (image_hash,),
+                )
+                row = cur.fetchone()
+        finally:
+            conn.close()
     except Exception as exc:
-        raise CheckFailed(f"could not query Feast: {exc}")
+        raise CheckFailed(f"could not query the image_features table: {exc}")
+
+    if row is None:
+        raise CheckFailed(
+            f"no `image_features` row for image_hash={image_hash} -- "
+            f"either _push_features() failed (check the inference pod's logs) "
+            f"or POSTGRES_HOST/PORT here don't point at the same database the "
+            f"inference pod uses."
+        )
+    day, confidence, dim = row
+    _ok(f"image_features row: embedding_dim={dim} day={day} model_confidence={confidence:.3f}")
 
 
 def step_verify_mlflow():
@@ -501,13 +438,13 @@ def main():
         step_verify_postgres(image_hash)
 
         if grade_body["source"] == "model":
-            step_verify_feast(image_hash)
+            step_verify_features(image_hash)
         else:
-            _step(4, "Feast: feature vector readback (item 4)")
+            _step(4, "Feature store: feature vector readback (item 4)")
             _warn(
                 f"source={grade_body['source']!r}, not 'model' -- this image hash was already "
                 f"reviewed before (cached_review short-circuit in main.py's /grade), so this run "
-                f"never called feature-extraction or pushed to Feast. Re-run with a different "
+                f"never called feature-extraction or stored features. Re-run with a different "
                 f"--image (or no --image, for a fresh synthetic one) to exercise this check."
             )
 

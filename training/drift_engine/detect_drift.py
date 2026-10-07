@@ -3,13 +3,14 @@
 Phase 8 drift engine, part 2 (runbook Step 16: "Image Data Drift
 Detection"). Meant to run on a schedule (cron -- see
 training/drift_engine/README.md for why GitHub Actions doesn't work for a
-job that needs localhost Postgres/Redis/Feast on this Mac).
+job that needs localhost Postgres/Redis on this Mac).
 
 Pipeline, each run:
-  1. Pull a sample of recent live embeddings out of Feast's online store --
-     via the RECENT_IDS_KEY Redis list services/inference/main.py maintains
-     (see that file's _push_to_feast()) and Feast's own
-     get_online_features() point-lookup.
+  1. Pull a sample of recent live embeddings out of the Postgres
+     `image_features` table (the feature store) -- the newest
+     LIVE_SAMPLE_SIZE rows by event_timestamp, which
+     services/inference/main.py writes on every live grading request (see
+     that file's _push_features()).
   2. Download the training-set baseline that compute_baseline.py logged as
      an MLflow artifact on the current production run.
   3. Compare the two distributions two ways, because they catch different
@@ -28,8 +29,8 @@ Pipeline, each run:
      services/inference/main.py already uses).
   5. If the last SUSTAINED_DRIFT_WINDOW consecutive runs (this one
      included) were ALL flagged, publishes one alert message to the
-     `garbhaai:drift_alerts` Redis pub/sub channel on the same Redis
-     container Feast's online store already runs on. Requiring several
+     `garbhaai:drift_alerts` Redis pub/sub channel (Redis is now used for
+     nothing else on this platform). Requiring several
      consecutive flagged runs (not one) is deliberate: a single noisy
      run on a small live sample is expected sometimes and shouldn't page
      anyone. The runbook is explicit that the actual retrain trigger
@@ -53,9 +54,6 @@ import mlflow
 import numpy as np
 import psycopg2
 import redis
-from feast import Entity, FeatureStore
-from feast.repo_config import RepoConfig
-from feast.value_type import ValueType
 from mlflow.tracking import MlflowClient
 
 MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5500")
@@ -69,30 +67,9 @@ os.environ.setdefault("AWS_ACCESS_KEY_ID", "garbhaai")
 os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "garbhaai_local_dev")
 os.environ.setdefault("MLFLOW_S3_ENDPOINT_URL", "http://localhost:9000")
 
-# --- Feast (reading, not writing) -----------------------------------------
-# Minimal re-declaration of training/feature_repo/features.py's entity +
-# view -- same self-contained-per-process convention as
-# services/inference/feast_schema.py (see that file's docstring). This
-# process only ever calls get_online_features(), never
-# write_to_online_store(), but FeatureStore still needs the view
-# registered in ITS OWN registry file to resolve "image_features:embedding"
-# feature references -- hence the store.apply() in get_feast_store() below,
-# even though semantically this is a read-only job.
-FEAST_REDIS_HOST = os.environ.get("FEAST_REDIS_HOST", "localhost")
-FEAST_REDIS_PORT = os.environ.get("FEAST_REDIS_PORT", "6379")
-FEAST_PROJECT = "garbhaai"
-FEAST_REGISTRY_PATH = os.environ.get(
-    "FEAST_REGISTRY_PATH", os.path.join(os.path.dirname(__file__), "feast_registry.db")
-)
-RECENT_IDS_KEY = "garbhaai:recent_image_ids"
-
-embryo_image = Entity(
-    name="image_id",
-    value_type=ValueType.STRING,
-    description="Unique identifier for a single embryo image (compute_image_hash()'s output).",
-)
-
-OFFLINE_SOURCE_PATH = "feast_offline_placeholder.parquet"
+# Redis is only used here to publish the sustained-drift alert (pub/sub).
+REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
+REDIS_PORT = os.environ.get("REDIS_PORT", "6379")
 
 DRIFT_ALERT_CHANNEL = "garbhaai:drift_alerts"
 
@@ -121,6 +98,18 @@ CREATE TABLE IF NOT EXISTS drift_results (
     drift_flagged BOOLEAN,
     sustained_alert_fired BOOLEAN NOT NULL DEFAULT FALSE
 );
+
+-- Same definition as services/inference/main.py (each component stays
+-- self-contained). Created here too so a drift run on a fresh database
+-- records a clean "no live samples yet" skip instead of failing.
+CREATE TABLE IF NOT EXISTS image_features (
+    image_hash TEXT PRIMARY KEY,
+    day INTEGER NOT NULL,
+    model_confidence REAL NOT NULL,
+    embedding REAL[] NOT NULL,
+    event_timestamp TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_image_features_ts ON image_features (event_timestamp DESC);
 """
 
 # Live-sample / statistics knobs. Overridable via env var for testing
@@ -138,78 +127,23 @@ MMD_ALPHA = float(os.environ.get("DRIFT_MMD_ALPHA", "0.05"))
 SUSTAINED_DRIFT_WINDOW = int(os.environ.get("DRIFT_SUSTAINED_WINDOW", "3"))
 
 
-def get_feast_store() -> FeatureStore:
-    import pandas as pd
-
-    offline_path = os.path.join(os.path.dirname(__file__), OFFLINE_SOURCE_PATH)
-    if not os.path.exists(offline_path):
-        pd.DataFrame([{
-            "image_id": "unused",
-            "event_timestamp": datetime.now(timezone.utc),
-            "day": 0,
-            "model_confidence": 0.0,
-            "embedding": [0.0] * 512,
-        }]).to_parquet(offline_path)
-
-    config = RepoConfig(
-        project=FEAST_PROJECT,
-        provider="local",
-        registry=FEAST_REGISTRY_PATH,
-        online_store={"type": "redis", "connection_string": f"{FEAST_REDIS_HOST}:{FEAST_REDIS_PORT}"},
-        offline_store={"type": "file"},
-        entity_key_serialization_version=3,
-    )
-    store = FeatureStore(config=config)
-
-    # Imported here (not module-level) only to keep this function the one
-    # place that needs the full view definition -- see feature_repo's
-    # features.py for the canonical copy this must stay in sync with.
-    from feast import FeatureView, Field, FileSource
-    from feast.types import Array, Float32, Int64
-    from datetime import timedelta
-
-    image_features_source = FileSource(path=OFFLINE_SOURCE_PATH, timestamp_field="event_timestamp")
-    image_features_view = FeatureView(
-        name="image_features",
-        entities=[embryo_image],
-        ttl=timedelta(days=365),
-        schema=[
-            Field(name="day", dtype=Int64),
-            Field(name="model_confidence", dtype=Float32),
-            Field(name="embedding", dtype=Array(Float32)),
-        ],
-        online=True,
-        source=image_features_source,
-    )
-    store.apply([embryo_image, image_features_view])
-    return store
-
-
 def get_raw_redis() -> "redis.Redis":
-    return redis.Redis(host=FEAST_REDIS_HOST, port=int(FEAST_REDIS_PORT), decode_responses=True)
+    return redis.Redis(host=REDIS_HOST, port=int(REDIS_PORT), decode_responses=True)
 
 
-def fetch_live_embeddings() -> tuple:
-    """Returns (embeddings array (n, 512) or None, n_candidates_checked).
-    Reads the most recent LIVE_SAMPLE_SIZE image_hashes off the Redis
-    recency list, then looks each one up in Feast's online store --- some
-    may come back empty (TTL'd out, or written then the key evicted) so
-    the returned array can be smaller than LIVE_SAMPLE_SIZE."""
-    r = get_raw_redis()
-    recent_ids = r.lrange(RECENT_IDS_KEY, 0, LIVE_SAMPLE_SIZE - 1)
-    if not recent_ids:
+def fetch_live_embeddings(conn) -> tuple:
+    """Returns (embeddings array (n, 512) or None, n_rows_found). Reads the
+    newest LIVE_SAMPLE_SIZE rows of the `image_features` table, so the
+    sample is always "whatever the model graded most recently"."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT embedding FROM image_features ORDER BY event_timestamp DESC LIMIT %s",
+            (LIVE_SAMPLE_SIZE,),
+        )
+        rows = cur.fetchall()
+    if not rows:
         return None, 0
-
-    store = get_feast_store()
-    result = store.get_online_features(
-        features=["image_features:embedding"],
-        entity_rows=[{"image_id": image_id} for image_id in recent_ids],
-    ).to_dict()
-
-    embeddings = [e for e in result["embedding"] if e is not None]
-    if not embeddings:
-        return None, len(recent_ids)
-    return np.asarray(embeddings, dtype=np.float32), len(recent_ids)
+    return np.asarray([r[0] for r in rows], dtype=np.float32), len(rows)
 
 
 def get_production_version(client: MlflowClient):
@@ -414,16 +348,16 @@ def main():
         conn.close()
         return
 
-    live, n_candidates = fetch_live_embeddings()
+    live, n_candidates = fetch_live_embeddings(conn)
     if live is None or live.shape[0] < MIN_LIVE_SAMPLES:
         n_found = 0 if live is None else live.shape[0]
-        reason = f"only {n_found} live embeddings available (need {MIN_LIVE_SAMPLES}), out of {n_candidates} recent ids checked"
+        reason = f"only {n_found} live embeddings available (need {MIN_LIVE_SAMPLES})"
         print(f"SKIPPED: {reason}")
         log_result(conn, {**base_row, "n_live_samples": n_found, "skipped": True, "skip_reason": reason})
         conn.close()
         return
 
-    print(f"Loaded {live.shape[0]} live embeddings (checked {n_candidates} recent ids)")
+    print(f"Loaded {live.shape[0]} live embeddings from image_features")
     print(f"Downloading baseline from production run {production.run_id}...")
     baseline = load_baseline(client, production.run_id)
     n_baseline = baseline["embeddings"].shape[0]

@@ -10,7 +10,8 @@ requests>=2.32.4
 # as training_engine/train.py and eval_engine/evaluate.py.
 boto3>=1.35,<2
 
-# detect_drift.py (next): reads live embeddings back out of Feast's Redis
-# online store and writes drift results to Postgres.
-feast[redis]>=0.47,<1
+# detect_drift.py: reads live embeddings from the Postgres image_features
+# table, writes drift results to Postgres, and publishes the sustained-drift
+# alert on a Redis pub/sub channel.
 psycopg2-binary>=2.9,<3
+redis>=4.6,<6

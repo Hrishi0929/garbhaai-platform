@@ -78,14 +78,6 @@ spec:
               value: "host.docker.internal"
             - name: MODEL_ALIAS
               value: "production"
-            # Phase 8: same host.docker.internal pattern above, now for the
-            # Redis container Feast's online store runs on -- see main.py's
-            # _push_to_feast()/get_feast_store(). Port matches the
-            # "6379:6379" mapping in infra/local/docker-compose.yml.
-            - name: FEAST_REDIS_HOST
-              value: "host.docker.internal"
-            - name: FEAST_REDIS_PORT
-              value: "6379"
           envFrom:
             - secretRef:
                 name: garbhaai-inference-secrets

@@ -1,7 +1,7 @@
 # Self-contained smoke-test script -- see run_smoke_test.py's module
 # docstring. Follows training/drift_engine/requirements.txt's convention
 # (ranges, not exact pins) since this script, like drift_engine, talks
-# directly to Feast/Postgres/MLflow rather than shipping as a container
+# directly to Postgres/MLflow rather than shipping as a container
 # with a fixed, CI-tested environment the way the services/ do.
 
 requests>=2.32.4
@@ -9,17 +9,8 @@ numpy>=1.26,<3
 Pillow>=10.4,<11
 psycopg2-binary>=2.9,<3
 
-# detect_drift.py's own reasoning applies here too: reads live embeddings
-# back out of Feast's Redis online store.
-feast[redis]>=0.47,<1
-
 # Phase 9 item 8: queries the MLflow registry for the "production" alias
 # and that version's run metrics. mlflow-skinny's tracking/registry client
 # API is all this needs -- see training_engine/requirements.txt for why
 # mlflow-skinny over the full mlflow package.
 mlflow-skinny>=2.17.0,<4
-
-# feast[redis]'s own transitive dep, imported directly by Feast's online
-# store code path -- listed explicitly per services/inference/requirements.txt's
-# same note.
-pandas>=2.3,<3

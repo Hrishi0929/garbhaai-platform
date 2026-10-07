@@ -36,15 +36,17 @@ Phase 3 data-quality gate independently corroborated by finding Day5
 uses a different grading taxonomy). /grade rejects day=5 explicitly
 rather than silently producing a meaningless prediction for it.
 
-Phase 8: every live (non-cached) /grade prediction now also pushes its
-512-dim feature vector into Feast's online store (see _push_to_feast())
-and records the image_hash in a small Redis recency list -- the only
-real path by which "live embeddings" exist in Feast at all; see
-training/feature_repo/README.md for the full explanation of why this
-service, not `feast materialize`, is what actually populates it. This
-is best-effort and never allowed to fail a grading request: a Feast/
-Redis hiccup logs a warning and the prediction still returns normally.
-training/drift_engine/detect_drift.py is what reads this back out.
+Phase 8: every live (non-cached) /grade prediction now also stores its
+512-dim feature vector in the Postgres `image_features` table (see
+_push_features()). That table is the platform's feature store: one row per
+image (keyed by image_hash) holding the day, the model's confidence, the
+embedding and a timestamp. It replaces the earlier Feast + Redis setup --
+Postgres is already part of the deployment, so there is one fewer moving
+part to run, and the same table serves live reads (drift detection asks
+for the most recent rows) and offline reads (training can read all of
+it). training/drift_engine/detect_drift.py is what reads it back out.
+Writing is best-effort and never allowed to fail a grading request: a
+database hiccup logs a warning and the prediction still returns normally.
 """
 import hashlib
 import io
@@ -56,18 +58,12 @@ from datetime import datetime, timezone
 
 import httpx
 import numpy as np
-import pandas as pd
 import psycopg2
 import psycopg2.extras
-import redis
 import torch
 import torch.nn as nn
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
-from feast import FeatureStore
-from feast.repo_config import RepoConfig
 from PIL import Image
-
-from feast_schema import OFFLINE_SOURCE_PATH, embryo_image, image_features_view
 
 logger = logging.getLogger("garbhaai.inference")
 logging.basicConfig(level=logging.INFO)
@@ -102,25 +98,6 @@ os.environ.setdefault("AWS_ACCESS_KEY_ID", "garbhaai")
 os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "garbhaai_local_dev")
 os.environ.setdefault("MLFLOW_S3_ENDPOINT_URL", "http://localhost:9000")
 
-# --- Feast online-store push (Phase 8) -------------------------------------
-# Same Redis container Feast's online_store already targets
-# (training/feature_repo/feature_store.yaml, infra/local/docker-compose.yml)
-# -- Feast itself has no pub/sub or event-log concept, it's a plain KV
-# store (one value per entity_id), so RECENT_IDS_KEY below is a small,
-# separate recency index this service maintains alongside it: a capped
-# Redis list of image_hashes, which detect_drift.py reads to know which
-# entity_ids to ask Feast for. Without it there would be no way to ask
-# Feast's online store for "whatever was graded recently" -- it only
-# supports point lookups by a known key.
-FEAST_REDIS_HOST = os.environ.get("FEAST_REDIS_HOST", "localhost")
-FEAST_REDIS_PORT = os.environ.get("FEAST_REDIS_PORT", "6379")
-FEAST_PROJECT = "garbhaai"
-FEAST_REGISTRY_PATH = os.environ.get(
-    "FEAST_REGISTRY_PATH", os.path.join(os.path.dirname(__file__), "feast_registry.db")
-)
-RECENT_IDS_KEY = "garbhaai:recent_image_ids"
-RECENT_IDS_MAX_LEN = 500
-
 POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "localhost")
 POSTGRES_PORT = os.environ.get("POSTGRES_PORT", "5432")
 POSTGRES_DB = os.environ.get("POSTGRES_DB", "garbhaai")
@@ -139,92 +116,52 @@ CREATE TABLE IF NOT EXISTS grade_records (
     patient_id TEXT,
     reviewed_at TIMESTAMPTZ NOT NULL
 );
+
+-- Feature store (Phase 8): one row per live-graded image. `embedding` is the
+-- 512-dim backbone vector. The timestamp index serves "most recent N rows",
+-- which is what drift detection asks for.
+CREATE TABLE IF NOT EXISTS image_features (
+    image_hash TEXT PRIMARY KEY,
+    day INTEGER NOT NULL,
+    model_confidence REAL NOT NULL,
+    embedding REAL[] NOT NULL,
+    event_timestamp TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_image_features_ts ON image_features (event_timestamp DESC);
+"""
+
+UPSERT_FEATURES_SQL = """
+INSERT INTO image_features (image_hash, day, model_confidence, embedding, event_timestamp)
+VALUES (%s, %s, %s, %s::real[], %s)
+ON CONFLICT (image_hash) DO UPDATE SET
+    day = EXCLUDED.day,
+    model_confidence = EXCLUDED.model_confidence,
+    embedding = EXCLUDED.embedding,
+    event_timestamp = EXCLUDED.event_timestamp
 """
 
 _checkpoint_cache = {}
-_feast_cache = {}
-_redis_cache = {}
 
 
-def get_raw_redis() -> "redis.Redis":
-    """The plain redis-py client, for the RECENT_IDS_KEY list that sits
-    alongside (but outside) Feast's own online-store abstraction. Shares
-    connection settings with the Feast store below but is a separate
-    client since Feast doesn't expose list/LPUSH primitives itself."""
-    if "client" not in _redis_cache:
-        _redis_cache["client"] = redis.Redis(
-            host=FEAST_REDIS_HOST, port=int(FEAST_REDIS_PORT), decode_responses=True
-        )
-    return _redis_cache["client"]
-
-
-def get_feast_store() -> FeatureStore:
-    """Builds a FeatureStore purely in Python -- no feature_store.yaml file
-    needed, verified directly against the installed feast==0.47.0 API
-    (RepoConfig takes online_store/offline_store as plain dicts). Applies
-    the schema once per process (idempotent; feast apply is an upsert) so
-    the first call after a cold start pays a small one-time cost and every
-    call after that is just a registry read.
-
-    A local sqlite registry file (FEAST_REGISTRY_PATH) is required by
-    FeatureStore even though nothing here ever queries it for anything but
-    this view's own schema -- it's created fresh on first use in whatever
-    directory this process can write to (the container's WORKDIR, or the
-    repo checkout on the host)."""
-    if "store" not in _feast_cache:
-        offline_path = os.path.join(os.path.dirname(__file__), OFFLINE_SOURCE_PATH)
-        if not os.path.exists(offline_path):
-            # Never actually read (see feast_schema.py's comment) -- just
-            # needs to exist with the right columns for FileSource's own
-            # validation inside store.apply().
-            pd.DataFrame([{
-                "image_id": "unused",
-                "event_timestamp": datetime.now(timezone.utc),
-                "day": 0,
-                "model_confidence": 0.0,
-                "embedding": [0.0] * 512,
-            }]).to_parquet(offline_path)
-
-        config = RepoConfig(
-            project=FEAST_PROJECT,
-            provider="local",
-            registry=FEAST_REGISTRY_PATH,
-            online_store={
-                "type": "redis",
-                "connection_string": f"{FEAST_REDIS_HOST}:{FEAST_REDIS_PORT}",
-            },
-            offline_store={"type": "file"},
-            entity_key_serialization_version=3,
-        )
-        store = FeatureStore(config=config)
-        store.apply([embryo_image, image_features_view])
-        _feast_cache["store"] = store
-    return _feast_cache["store"]
-
-
-def _push_to_feast(image_hash: str, day: int, confidence: float, features: list) -> None:
-    """Best-effort: a Feast/Redis problem here must never break a grading
+def _push_features(db, image_hash: str, day: int, confidence: float, features: list) -> None:
+    """Best-effort: a database problem here must never break a grading
     request, which is this service's actual job. Logs a warning and moves
     on -- detect_drift.py simply sees fewer live samples that run, same as
     any other monitoring gap."""
     try:
-        store = get_feast_store()
-        df = pd.DataFrame([{
-            "image_id": image_hash,
-            "event_timestamp": datetime.now(timezone.utc),
-            "day": day,
-            "model_confidence": confidence,
-            "embedding": features,
-        }])
-        store.write_to_online_store(feature_view_name="image_features", df=df)
-
-        r = get_raw_redis()
-        pipe = r.pipeline()
-        pipe.lpush(RECENT_IDS_KEY, image_hash)
-        pipe.ltrim(RECENT_IDS_KEY, 0, RECENT_IDS_MAX_LEN - 1)
-        pipe.execute()
+        with db.cursor() as cur:
+            cur.execute(
+                UPSERT_FEATURES_SQL,
+                (image_hash, day, confidence, [float(x) for x in features],
+                 datetime.now(timezone.utc)),
+            )
+        db.commit()
     except Exception as exc:
-        logger.warning("could not push image %s to Feast (continuing): %s", image_hash, exc)
+        logger.warning("could not store features for image %s (continuing): %s", image_hash, exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
 
 def compute_image_hash(image_bytes: bytes) -> str:
@@ -412,7 +349,7 @@ async def grade(
     # cached_review response above returns early and never reaches here,
     # which is correct: it's the same image seen before, not a fresh
     # sample of what the model is being asked to grade right now.
-    _push_to_feast(image_hash, day, prediction["confidence"], features)
+    _push_features(db, image_hash, day, prediction["confidence"], features)
 
     return {
         "source": "model",

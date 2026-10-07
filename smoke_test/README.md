@@ -2,7 +2,7 @@
 
 Runs the runbook's own Phase 9 checklist against the real, live stack: one
 image through quality-check, ingestion, inference, a doctor review, and
-direct reads of Postgres/Feast/MLflow/kubectl/Grafana to confirm each step
+direct reads of Postgres/MLflow/kubectl/Grafana to confirm each step
 actually left the evidence the checklist expects.
 
 ## Prerequisites
@@ -55,7 +55,6 @@ inference to a different local port:
 | `INGESTION_URL` | `http://localhost:8001` |
 | `INFERENCE_URL` | `http://localhost:8005` |
 | `POSTGRES_HOST` / `_PORT` / `_DB` / `_USER` / `_PASSWORD` | `localhost` / `5432` / `garbhaai` / `garbhaai` / `garbhaai_local_dev` |
-| `FEAST_REDIS_HOST` / `_PORT` | `localhost` / `6379` |
 | `MLFLOW_TRACKING_URI` | `http://localhost:5500` |
 | `MODEL_ALIAS` | `production` |
 
@@ -66,7 +65,7 @@ inference to a different local port:
 | 1 | Postgres row + RustFS object on ingest | `POST /ingest`, then `SELECT` from `images` |
 | 2 | `quality_checks` row for the trace_id | `POST /check-quality`, then `SELECT` from `quality_checks` (Phase 9 gap-closure) |
 | 3 | Processed copy in a "clean" bucket | **Out of scope** -- preprocessing is stateless and nothing downstream reads a clean bucket; deferred per the Phase 9 gap-analysis decision |
-| 4 | Feature vector readable from Feast | builds a `FeatureStore` from the same schema as `services/inference/feast_schema.py`, calls `get_online_features(image_id=<image_hash>)` |
+| 4 | Feature vector stored in Postgres | reads the `image_features` row for the image hash and checks the 512-dim embedding is there |
 | 5 | Inference returns grade + confidence | `POST /grade` |
 | 6 | Doctor review writes `app_db.labels` | `POST /review`, then `SELECT` from `grade_records` (this repo's name for that table) |
 | 7 | Nightly DVC job versions the new label | **Out of scope** -- no scheduled DVC job exists yet; deferred per the Phase 9 gap-analysis decision |
@@ -89,9 +88,9 @@ not because this script checks them.
 
 Inference's `/grade` endpoint short-circuits to a cached review
 (`source != "model"`) if it's seen this exact image hash before, which
-skips the feature-extraction + Feast-push path entirely. Since the
+skips the feature-extraction + feature-store write path entirely. Since the
 synthetic image is deterministic, a second run with no `--image` will
-print a `WARN` instead of exercising the Feast check. Pass a different
+print a `WARN` instead of exercising the feature-store check. Pass a different
 real `--image` (or add `np.random.RandomState(42)`'s seed as a CLI flag,
 if this comes up often enough to be worth doing) to get a fresh hash on
 every run.

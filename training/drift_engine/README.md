@@ -9,7 +9,7 @@ Two scripts:
   (the raw embeddings, plus per-dimension decile bucket edges/proportions)
   as an MLflow artifact on the current production run.
 - **`detect_drift.py`** -- run on a schedule (see below). Pulls a sample
-  of recently-graded images' embeddings out of Feast's online store,
+  of recently-graded images' embeddings out of the Postgres `image_features` table (the feature store),
   downloads the baseline the last `compute_baseline.py` run attached to
   the current production model, and compares them with two statistics:
   PSI (per-dimension population shift) and MMD (a kernel two-sample test
@@ -33,9 +33,9 @@ python compute_baseline.py    # once, after the first promote.py run
 python detect_drift.py        # once, by hand, to confirm it runs clean
 ```
 
-`detect_drift.py` needs real live traffic in Feast to do anything useful
+`detect_drift.py` needs real live traffic in the `image_features` table to do anything useful
 -- send a handful of real `/grade` requests through `services/inference`
-first (each one pushes its embedding via `_push_to_feast()`), or it will
+first (each one stores its embedding via `_push_features()`), or it will
 print `SKIPPED: only N live embeddings available` and log a skipped row
 rather than failing.
 

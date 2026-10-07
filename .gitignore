@@ -24,3 +24,14 @@ training/training_engine/outputs/
 
 # OS cruft
 .DS_Store
+
+# Next.js UI build output / deps
+services/ui-next/node_modules/
+services/ui-next/.next/
+
+# Local-only runtime data (databases, object store, DVC cache, generated manifest)
+.dvc/tmp/
+infra/local/.volumes/
+infra/local/marquez/.volumes/
+training/feature_repo/
+training/data_quality/manifest.csv

@@ -56,6 +56,18 @@ services:
       - "8005:8000"
     environment:
       FEATURE_EXTRACTION_URL: http://feature-extraction:8000
+      # MLflow runs in the infra/local compose project and publishes 5500 on
+      # the host. Without this, the service looked for MLflow at localhost
+      # (itself) and every first /grade request hung for minutes while
+      # MLflow's client retried before falling back to the bundled model.
+      MLFLOW_TRACKING_URI: http://host.docker.internal:5500
+      # The model file itself lives in RustFS (S3-compatible, host port 9000),
+      # which the MLflow client reads directly -- same host.docker.internal
+      # reason as above.
+      MLFLOW_S3_ENDPOINT_URL: http://host.docker.internal:9000
+      # If MLflow is down, give up fast and use the bundled model instead.
+      MLFLOW_HTTP_REQUEST_MAX_RETRIES: "1"
+      MLFLOW_HTTP_REQUEST_TIMEOUT: "10"
       POSTGRES_HOST: host.docker.internal
       POSTGRES_PORT: "5432"
       POSTGRES_DB: garbhaai
@@ -65,12 +77,13 @@ services:
       - feature-extraction
 
   ui:
-    build: ./ui
+    # Next.js UI (replaces the old Streamlit client in ./ui). Its server-side
+    # route handlers forward browser calls to the three FastAPI services below,
+    # so the browser only ever talks to this one container.
+    build: ./ui-next
     ports:
-      - "8511:8501"  # host 8501 is commonly taken by another local Streamlit
-                     # app (e.g. the old garbhaai-embryo-grading app) -- this
-                     # avoids the collision rather than requiring you to
-                     # close that other process.
+      - "8511:3000"  # same host port the Streamlit UI used, so bookmarks and
+                     # the demo script keep working.
     environment:
       INGESTION_URL: http://ingestion:8000
       QUALITY_CHECK_URL: http://quality-check:8000
