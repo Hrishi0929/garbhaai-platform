@@ -14,6 +14,7 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         service: [ingestion, quality-check, preprocessing, feature-extraction, inference]
     steps:
@@ -31,9 +32,10 @@ jobs:
       - name: Push to GHCR (on merge to main)
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: |
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker tag ${{ matrix.service }}:${{ github.sha }} ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}:${{ github.sha }}
-          docker push ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}:${{ github.sha }}
+          docker tag ${{ matrix.service }}:${{ github.sha }} ghcr.io/${OWNER}/${{ matrix.service }}:${{ github.sha }}
+          docker push ghcr.io/${OWNER}/${{ matrix.service }}:${{ github.sha }}
 
   ui-next:
     # Next.js UI (replaces the old Streamlit `ui` service).
@@ -59,9 +61,10 @@ jobs:
       - name: Push to GHCR (on merge to main)
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: |
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker tag ui-next:${{ github.sha }} ghcr.io/${{ github.repository_owner }}/ui-next:${{ github.sha }}
-          docker push ghcr.io/${{ github.repository_owner }}/ui-next:${{ github.sha }}
+          docker tag ui-next:${{ github.sha }} ghcr.io/${OWNER}/ui-next:${{ github.sha }}
+          docker push ghcr.io/${OWNER}/ui-next:${{ github.sha }}
 
   training-eval-engine:
     # training_engine/train.py and eval_engine/evaluate.py aren't deployed
